@@ -1,0 +1,10 @@
+[package]
+name = "blooms-db"
+version = "0.1.0"
+authors = ["debris <marek.kotewicz@gmail.com>"]
+
+[dependencies]
+arrayref = "0.3.4"
+byteorder = "1.2"
+ethbloom = "0.5.0"
+memmap = "0.6.2"
