@@ -3,11 +3,11 @@
 //! zero allocation
 //! zero copying
 
-#[macro_use]
-extern crate arrayref;
 extern crate byteorder;
 extern crate ethbloom;
-extern crate memmap;
+
+#[cfg(test)]
+extern crate tempdir;
 
 mod db;
 mod file;

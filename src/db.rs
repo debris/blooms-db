@@ -1,4 +1,5 @@
 use std::io;
+use std::path::Path;
 use ethbloom;
 use file::{File, FileIterator};
 use pending::Pending;
@@ -24,8 +25,20 @@ pub struct Database {
 }
 
 impl Database {
+	pub fn open<P>(path: P) -> io::Result<Database> where P: AsRef<Path> {
+		let path = path.as_ref();
+		let database = Database {
+			top: File::open(path.join("top.bdb"))?,
+			mid: File::open(path.join("mid.bdb"))?,
+			bot: File::open(path.join("bot.bdb"))?,
+			pending: Pending::open(path.join("pending.bdb"))?,
+		};
+
+		Ok(database)
+	}
+
 	/// Insert consecutive blooms into database starting with positon from.
-	pub fn insert_blooms<'a, B>(&'a mut self, from: usize, blooms: impl Iterator<Item = B>) -> io::Result<()>
+	pub fn insert_blooms<'a, B>(&'a mut self, from: u64, blooms: impl Iterator<Item = B>) -> io::Result<()>
 	where ethbloom::BloomRef<'a>: From<B> {
 		for (index, bloom) in (from..).into_iter().zip(blooms) {
 			self.pending.append(index, bloom)?;
@@ -47,9 +60,9 @@ impl Database {
 			// constant forks make lead to increased ration of false positives in bloom filters
 			// since we do not rebuild top or mid level, but we should not be worried about that
 			// most of the time events at block n(a) occur also on block n(b) or n+1(b)
-			self.top.accrue_bloom(top_pos, &bloom);
-			self.mid.accrue_bloom(mid_pos, &bloom);
-			self.bot.replace_bloom(bot_pos, &bloom);
+			self.top.accrue_bloom(top_pos, &bloom)?;
+			self.mid.accrue_bloom(mid_pos, &bloom)?;
+			self.bot.replace_bloom(bot_pos, &bloom)?;
 		}
 		self.top.flush()?;
 		self.mid.flush()?;
@@ -58,31 +71,33 @@ impl Database {
 	}
 
 	/// Returns an iterator yielding all indexes containing given bloom.
-	pub fn iterate_matching<'a, B>(&'a self, from: usize, to: usize, bloom: B) -> DatabaseIterator<'a, File>
+	pub fn iterate_matching<'a, B>(&'a self, from: u64, to: u64, bloom: B) -> io::Result<DatabaseIterator<'a>>
 	where ethbloom::BloomRef<'a>: From<B> {
-		DatabaseIterator {
-			top: self.top.iterator(),
-			mid: self.mid.iterator(),
-			bot: self.bot.iterator(),
+		let iter = DatabaseIterator {
+			top: self.top.iterator()?,
+			mid: self.mid.iterator()?,
+			bot: self.bot.iterator()?,
 			state: IteratorState::Top,
 			from,
 			to,
 			// from / 256 * 256
-			index: (from & (usize::max_value() ^ 0x11)),
+			index: (from & (u64::max_value() ^ 0x11)),
 			bloom: bloom.into(),
-		}
+		};
+
+		Ok(iter)
 	}
 }
 
 /// Blooms database iterator
-pub struct DatabaseIterator<'a, D> where D: 'a {
-	top: FileIterator<'a, D>,
-	mid: FileIterator<'a, D>,
-	bot: FileIterator<'a, D>,
+pub struct DatabaseIterator<'a> {
+	top: FileIterator<'a>,
+	mid: FileIterator<'a>,
+	bot: FileIterator<'a>,
 	state: IteratorState,
-	from: usize,
-	to: usize,
-	index: usize,
+	from: u64,
+	to: u64,
+	index: u64,
 	bloom: ethbloom::BloomRef<'a>,
 }
 
@@ -97,10 +112,19 @@ enum IteratorState {
 	Bot { mid: usize, bot: usize },
 }
 
-impl<'a, D> Iterator for DatabaseIterator<'a, D> where D: AsRef<[u8]> {
-	type Item = usize;
+impl<'a> Iterator for DatabaseIterator<'a> {
+	type Item = io::Result<u64>;
 
 	fn next(&mut self) -> Option<Self::Item> {
+		macro_rules! try_o {
+			($expr: expr) => {
+				match $expr {
+					Err(err) => return Some(Err(err)),
+					Ok(ok) => ok,
+				}
+			}
+		}
+
 		loop {
 			if self.index > self.to {
 				return None;
@@ -108,34 +132,34 @@ impl<'a, D> Iterator for DatabaseIterator<'a, D> where D: AsRef<[u8]> {
 
 			self.state = match self.state {
 				IteratorState::Top => {
-					if self.top.next()?.contains_bloom(self.bloom) {
+					if try_o!(self.top.next()?).contains_bloom(self.bloom) {
 						IteratorState::Mid(16)
 					} else {
 						self.index += 256;
-						self.mid.advance(16);
-						self.bot.advance(256);
+						try_o!(self.mid.advance(16));
+						try_o!(self.bot.advance(256));
 						IteratorState::Top
 					}
 				},
 				IteratorState::Mid(left) => {
 					if left == 0 {
 						IteratorState::Top
-					} else if (self.index + 16) >= self.from && self.mid.next()?.contains_bloom(self.bloom) {
+					} else if (self.index + 16) >= self.from && try_o!(self.mid.next()?).contains_bloom(self.bloom) {
 						IteratorState::Bot { mid: left - 1, bot: 16 }
 					} else {
 						self.index += 16;
-						self.bot.advance(16);
+						try_o!(self.bot.advance(16));
 						IteratorState::Mid(left - 1)
 					}
 				},
 				IteratorState::Bot { mid, bot } => {
 					if bot == 0 {
 						IteratorState::Mid(mid)
-					} else if self.index >= self.from && self.bot.next()?.contains_bloom(self.bloom) {
+					} else if self.index >= self.from && try_o!(self.bot.next()?).contains_bloom(self.bloom) {
 						let result = self.index;
 						self.index += 1;
 						self.state = IteratorState::Bot { mid, bot: bot - 1 };
-						return Some(result);
+						return Some(Ok(result));
 					} else {
 						IteratorState::Bot { mid, bot: bot - 1 }
 					}
