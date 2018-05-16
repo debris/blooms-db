@@ -18,7 +18,8 @@ impl File {
 			.read(true)
 			.write(true)
 			.create(true)
-			.append(true)
+			// appending is done manually by calling `ensure_space_for_write`
+			.append(false)
 			.open(path)?;
 		let len = file.metadata()?.len();
 
@@ -70,9 +71,9 @@ impl File {
 	}
 
 	/// Returns an iterator over file.
-	pub fn iterator(&self) -> io::Result<FileIterator> {
+	pub fn iterator_from(&self, pos: u64) -> io::Result<FileIterator> {
 		let mut file_ref = &self.file;
-		file_ref.seek(SeekFrom::Start(0))?;
+		file_ref.seek(SeekFrom::Start(pos * 256))?;
 
 		let iter = FileIterator {
 			file: file_ref,
@@ -114,3 +115,19 @@ impl<'a> Iterator for FileIterator<'a> {
 	}
 }
 
+#[cfg(test)]
+mod tests {
+	use ethbloom::Bloom;
+	use tempdir::TempDir;
+	use super::File;
+
+	#[test]
+	fn test_file() {
+		let tempdir = TempDir::new("").unwrap();
+		let mut file = File::open(tempdir.path().join("file")).unwrap();
+		file.accrue_bloom(0, &Bloom::from(1)).unwrap();
+		file.flush().unwrap();
+		assert_eq!(file.read_bloom(0).unwrap(), Bloom::from(1));
+
+	}
+}

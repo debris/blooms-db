@@ -82,8 +82,8 @@ impl<'a> Iterator for PendingIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-	use tempdir::TempDir;
 	use ethbloom::Bloom;
+	use tempdir::TempDir;
 	use super::Pending;
 
 	#[test]
