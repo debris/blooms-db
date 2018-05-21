@@ -5,20 +5,16 @@
 
 extern crate byteorder;
 extern crate ethbloom;
+extern crate tiny_keccak;
 
 #[cfg(test)]
 extern crate tempdir;
 
 mod db;
 mod file;
+mod meta;
 mod pending;
 
-pub use db::{Database, DatabaseIterator};
+pub const VERSION: u64 = 1;
 
-#[cfg(test)]
-mod tests {
-	#[test]
-	fn it_works() {
-		assert_eq!(2 + 2, 4);
-	}
-}
+pub use db::{Database, DatabaseIterator};

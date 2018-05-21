@@ -1,7 +1,11 @@
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
 use ethbloom;
+
+use VERSION;
 use file::{File, FileIterator};
+use meta::{Meta, read_meta, save_meta};
 use pending::Pending;
 
 /// Bloom positions in database files.
@@ -40,6 +44,8 @@ pub struct Database {
 	///
 	/// Inserted blooms are always appended to this file
 	pending: Pending,
+	/// Datbase directory
+	path: PathBuf,
 }
 
 impl Database {
@@ -51,7 +57,19 @@ impl Database {
 			mid: File::open(path.join("mid.bdb"))?,
 			bot: File::open(path.join("bot.bdb"))?,
 			pending: Pending::open(path.join("pending.bdb"))?,
+			path: path.to_path_buf(),
 		};
+
+		match read_meta(path.join("meta.bdb")) {
+			Ok(meta) => {
+				let pending_hash = database.pending.hash()?;
+				if pending_hash != meta.pending_hash {
+					return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed pending file"));
+				}
+			},
+			Err(ref err) if err.kind() == io::ErrorKind::NotFound => {},
+			Err(err) => return Err(err),
+		}
 
 		Ok(database)
 	}
@@ -62,7 +80,8 @@ impl Database {
 		for (index, bloom) in (from..).into_iter().zip(blooms) {
 			self.pending.append(index, bloom)?;
 		}
-		self.pending.flush()
+		self.pending.flush()?;
+		self.flush_meta()
 	}
 
 	/// Flush pending blooms.
@@ -81,7 +100,8 @@ impl Database {
 		self.top.flush()?;
 		self.mid.flush()?;
 		self.bot.flush()?;
-		self.pending.clear()
+		self.pending.clear()?;
+		self.flush_meta()
 	}
 
 	/// Returns an iterator yielding all indexes containing given bloom.
@@ -102,6 +122,15 @@ impl Database {
 		};
 
 		Ok(iter)
+	}
+
+	fn flush_meta(&self) -> io::Result<()> {
+		let meta = Meta {
+			version: VERSION,
+			pending_hash: self.pending.hash()?
+		};
+
+		save_meta(self.path.join("meta.bdb"), &meta)
 	}
 }
 

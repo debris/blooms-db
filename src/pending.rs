@@ -1,8 +1,10 @@
 use std::io::{Seek, SeekFrom, Write, Read};
 use std::path::Path;
 use std::{fs, io};
+
 use byteorder::{WriteBytesExt, ReadBytesExt, LittleEndian};
 use ethbloom;
+use tiny_keccak::Keccak;
 
 /// File with blooms which are not flushed to the database yet.
 pub struct Pending {
@@ -54,6 +56,27 @@ impl Pending {
 		};
 
 		Ok(iter)
+	}
+
+	/// Returns file hash.
+	pub fn hash(&self) -> io::Result<[u8; 32]> {
+		let mut file_ref = &self.file;
+		file_ref.seek(SeekFrom::Start(0))?;
+		let mut keccak = Keccak::new_keccak256();
+		let mut buffer = [0u8; 256 + 8];
+		loop {
+			match file_ref.read_exact(&mut buffer) {
+				Ok(_) => {
+					keccak.update(&mut buffer);
+				},
+				Err(ref err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+					let mut result = [0u8; 32];
+					keccak.finalize(&mut result);
+					return Ok(result);
+				},
+				Err(err) => return Err(err),
+			}
+		}
 	}
 }
 
